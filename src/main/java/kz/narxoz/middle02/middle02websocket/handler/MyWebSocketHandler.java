@@ -1,21 +1,28 @@
 package kz.narxoz.middle02.middle02websocket.handler;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import kz.narxoz.middle02.middle02websocket.message.CustomMessage;
 import kz.narxoz.middle02.middle02websocket.websocket.UserSession;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
-
+import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class MyWebSocketHandler extends AbstractWebSocketHandler {
 
     private final Map<String, UserSession> sessions = new ConcurrentHashMap<>();
+    private final ObjectMapper objectMapper;
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
@@ -40,7 +47,6 @@ public class MyWebSocketHandler extends AbstractWebSocketHandler {
         }
 
     }
-
     @Override
     protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         String request = sessions.get(session.getId()).getUsername() + ": " + message.getPayload();
@@ -52,6 +58,66 @@ public class MyWebSocketHandler extends AbstractWebSocketHandler {
         sendMessageToAll(request);
 
     }
+    @Override
+    public void handleMessage(WebSocketSession session, WebSocketMessage<?> message) throws Exception {
+
+        String payload = message.getPayload().toString();
+        CustomMessage parsedMessage = parseMessage(payload);
+
+        if(parsedMessage != null) {
+            switch(parsedMessage.getType()) {
+                case "CHAT" -> handleChatMessage(session, parsedMessage);
+                case "COMMAND" -> handleCommand(session, parsedMessage);
+            }
+        }
+    }
+
+    private void handleChatMessage(WebSocketSession session, CustomMessage message) {
+        String userName = sessions.get(session.getId()).getUsername();
+        sendMessageToAll(userName + ": " + message.getContent());
+    }
+    private void handleCommand(WebSocketSession session, CustomMessage message) {
+        switch (message.getContent()) {
+            case "disconnect" -> {
+                try {
+                    sessions.remove(session.getId());
+                    session.close();
+                }catch (IOException e){
+                    System.err.println("Error while closing session" + e.getMessage());
+                }
+            }
+            case "listUsers" -> {
+                String activeUsers = getActiveUsers();
+                sendMessage(session, "Active users: " + activeUsers);
+            }
+        }
+    }
+    private void sendMessage(WebSocketSession session, String message) {
+        try {
+            session.sendMessage(new TextMessage(message));
+        }catch (IOException e) {
+            System.err.println("Error sending message" + e.getMessage());
+            log.info("Error sending message" + e.getMessage());
+        }
+    }
+
+    private CustomMessage parseMessage(String payload) {
+        try {
+//            return objectMapper.readValue(payload, CustomMessage.class);
+            CustomMessage message = objectMapper.readValue(payload, CustomMessage.class);
+            return message;
+        }catch (JsonProcessingException e){
+            log.info("Error parsing JSON message" + e.getMessage());
+            return null;
+        }
+    }
+
+
+    private String getActiveUsers(){
+        return sessions.values().stream()
+                .map(UserSession::getUsername)
+                .collect(Collectors.joining(", "));
+    }
     private void  sendMessageToAll(String message){
         for(UserSession userSession : sessions.values()){
             try {
@@ -61,4 +127,7 @@ public class MyWebSocketHandler extends AbstractWebSocketHandler {
             }
         }
     }
+
+
+
 }
